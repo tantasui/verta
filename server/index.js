@@ -16,6 +16,7 @@ import reactionRoutes from './routes/reactions.js';
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
 import streamRoutes from './routes/stream.js';
+import streamQuiltRoutes from './routes/stream-quilt.js';
 
 // Import config
 import pool from './config/database.js';
@@ -84,6 +85,7 @@ app.use('/api/comments', commentRoutes);
 app.use('/api/reactions', reactionRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/stream', streamRoutes);
+app.use('/api/stream/quilt', streamQuiltRoutes);
 
 // 404 handler
 app.use((req, res) => {

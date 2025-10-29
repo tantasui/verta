@@ -3,6 +3,7 @@ import pool from '../config/database.js';
 import { authenticate, optionalAuth } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { cacheHelpers } from '../config/redis.js';
+import { saveDramaChunks } from '../controllers/drama-chunks.js';
 
 const router = express.Router();
 
@@ -180,15 +181,30 @@ router.post('/', authenticate, async (req, res, next) => {
       walrusBlobObjectId,
       walrusThumbnailBlobId,
       walrusEndEpoch,
+      // Quilt-specific fields
+      walrusQuiltId,
+      walrusQuiltObjectId,
+      quiltPatches,
     } = req.body;
 
-    // Support both traditional URLs and Walrus blob IDs
-    if (!title || (!videoUrl && !walrusBlobId) || !duration) {
-      throw new AppError('Title, video (URL or Walrus blob ID), and duration are required', 400);
+    // Support both traditional URLs, Walrus blob IDs, and Quilts
+    if (!title || (!videoUrl && !walrusBlobId && !walrusQuiltId) || !duration) {
+      throw new AppError('Title, video (URL, Walrus blob ID, or Quilt ID), and duration are required', 400);
     }
 
-    // If Walrus blob ID provided, construct stream URL
-    const finalVideoUrl = walrusBlobId ? `/api/stream/${walrusBlobId}` : videoUrl;
+    // Determine video URL based on storage type
+    let finalVideoUrl;
+    if (walrusQuiltId) {
+      // Quilt-based video - use quilt streaming endpoint
+      finalVideoUrl = `/api/stream/quilt/${walrusQuiltId}`;
+    } else if (walrusBlobId) {
+      // Single blob video
+      finalVideoUrl = `/api/stream/${walrusBlobId}`;
+    } else {
+      // Traditional URL
+      finalVideoUrl = videoUrl;
+    }
+
     const finalThumbnailUrl = walrusThumbnailBlobId
       ? `/api/stream/${walrusThumbnailBlobId}`
       : thumbnailUrl;
@@ -212,12 +228,19 @@ router.post('/', authenticate, async (req, res, next) => {
         category,
         tags || [],
         emotionalTags || [],
-        walrusBlobId || null,
-        walrusBlobObjectId || null,
+        walrusQuiltId || walrusBlobId || null,
+        walrusQuiltObjectId || walrusBlobObjectId || null,
         walrusThumbnailBlobId || null,
         walrusEndEpoch || null,
       ]
     );
+
+    const drama = result.rows[0];
+
+    // If this is a quilt-based video, save chunks to database
+    if (walrusQuiltId && quiltPatches && Array.isArray(quiltPatches)) {
+      await saveDramaChunks(drama.id, walrusQuiltId, quiltPatches, duration);
+    }
 
     // Clear cache
     await cacheHelpers.delPattern('dramas:*');

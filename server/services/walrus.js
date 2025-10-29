@@ -1,6 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import FormData from 'form-data';
 import { fileURLToPath } from 'url';
 import { createReadStream, createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
@@ -85,6 +86,136 @@ export async function uploadToWalrus(filePath, options = {}) {
       console.error('Response data:', error.response.data);
     }
     throw new Error(`Failed to upload to Walrus: ${error.message}`);
+  }
+}
+
+/**
+ * Upload multiple chunks as a Quilt to Walrus
+ * @param {Array} chunks - Array of chunk objects with buffer/filePath and metadata
+ * @param {Object} options - Upload options
+ * @returns {Promise<Object>} - Upload result with quilt ID and patch IDs
+ */
+export async function uploadQuiltToWalrus(chunks, options = {}) {
+  try {
+    const { epochs = STORAGE_EPOCHS, deletable = true } = options;
+
+    console.log(`📦 Uploading ${chunks.length} chunks as Quilt to Walrus`);
+
+    // Create form data with all chunks
+    const form = new FormData();
+
+    // Add each chunk with its identifier
+    for (const chunk of chunks) {
+      if (chunk.buffer) {
+        // If we have a buffer, use it directly
+        form.append(chunk.identifier, chunk.buffer, {
+          filename: `${chunk.identifier}.bin`,
+          contentType: 'application/octet-stream',
+        });
+      } else if (chunk.filePath) {
+        // If we have a file path, create read stream
+        form.append(chunk.identifier, fs.createReadStream(chunk.filePath), {
+          filename: `${chunk.identifier}.bin`,
+          contentType: 'application/octet-stream',
+        });
+      } else {
+        throw new Error(`Chunk ${chunk.identifier} has no buffer or filePath`);
+      }
+    }
+
+    // Add metadata if provided
+    if (options.metadata && options.metadata.length > 0) {
+      form.append('_metadata', JSON.stringify(options.metadata));
+    }
+
+    const url = `${PUBLISHER}/v1/quilts?epochs=${epochs}&deletable=${deletable}`;
+
+    console.log(`📤 Uploading Quilt to ${url}`);
+
+    const response = await axios.put(url, form, {
+      headers: {
+        ...form.getHeaders(),
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+    });
+
+    console.log('✅ Quilt upload response:', JSON.stringify(response.data, null, 2));
+
+    // Extract quilt information
+    let quiltId, quiltObjectId, endEpoch, cost;
+
+    if (response.data.blobStoreResult && response.data.blobStoreResult.newlyCreated) {
+      const { blobObject, cost: uploadCost } = response.data.blobStoreResult.newlyCreated;
+      quiltId = blobObject.blobId;
+      quiltObjectId = blobObject.id;
+      endEpoch = blobObject.storage.endEpoch;
+      cost = uploadCost;
+    } else if (response.data.blobStoreResult && response.data.blobStoreResult.alreadyCertified) {
+      const { blobId: existingBlobId, endEpoch: existingEndEpoch } = response.data.blobStoreResult.alreadyCertified;
+      quiltId = existingBlobId;
+      endEpoch = existingEndEpoch;
+      cost = 0;
+    } else {
+      throw new Error('Unexpected response from Walrus publisher');
+    }
+
+    // Extract quilt patch IDs
+    const patches = response.data.storedQuiltBlobs || [];
+
+    return {
+      success: true,
+      quiltId,
+      quiltObjectId,
+      endEpoch,
+      cost,
+      patches: patches.map((patch) => ({
+        identifier: patch.identifier,
+        quiltPatchId: patch.quiltPatchId,
+      })),
+      url: `${AGGREGATOR}/v1/blobs/${quiltId}`,
+    };
+  } catch (error) {
+    console.error('❌ Quilt upload error:', error.message);
+    if (error.response) {
+      console.error('Response data:', error.response.data);
+    }
+    throw new Error(`Failed to upload Quilt to Walrus: ${error.message}`);
+  }
+}
+
+/**
+ * Download a quilt patch (chunk) from Walrus and cache it
+ * @param {string} quiltPatchId - Walrus quilt patch ID
+ * @returns {Promise<string>} - Path to cached file
+ */
+export async function downloadQuiltPatch(quiltPatchId) {
+  try {
+    const cachedPath = getCachePath(quiltPatchId);
+
+    // Check if already cached
+    if (fs.existsSync(cachedPath)) {
+      console.log(`💾 Using cached patch: ${quiltPatchId}`);
+      return cachedPath;
+    }
+
+    console.log(`📥 Downloading quilt patch from Walrus: ${quiltPatchId}`);
+
+    const url = `${AGGREGATOR}/v1/blobs/by-quilt-patch-id/${quiltPatchId}`;
+    const response = await axios.get(url, {
+      responseType: 'stream',
+      timeout: 30000,
+    });
+
+    // Stream to cache file
+    const writer = createWriteStream(cachedPath);
+    await pipeline(response.data, writer);
+
+    console.log(`✅ Cached patch: ${quiltPatchId}`);
+    return cachedPath;
+  } catch (error) {
+    console.error('❌ Quilt patch download error:', error.message);
+    throw new Error(`Failed to download quilt patch from Walrus: ${error.message}`);
   }
 }
 
@@ -303,7 +434,9 @@ setInterval(() => {
 
 export default {
   uploadToWalrus,
+  uploadQuiltToWalrus,
   downloadFromWalrus,
+  downloadQuiltPatch,
   streamBlob,
   streamBlobWithRange,
   getCachePath,

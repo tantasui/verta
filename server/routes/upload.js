@@ -7,7 +7,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { authenticate } from '../middleware/auth.js';
 import { uploadRateLimiter } from '../middleware/rateLimiter.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { uploadToWalrus } from '../services/walrus.js';
+import { uploadToWalrus, uploadQuiltToWalrus } from '../services/walrus.js';
+import { chunkVideoFile } from '../utils/chunker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,7 +65,7 @@ const upload = multer({
   },
 });
 
-// Upload video to Walrus
+// Upload video to Walrus with Quilt chunking
 router.post(
   '/video',
   authenticate,
@@ -78,27 +79,72 @@ router.post(
       }
 
       tempFilePath = req.file.path;
+      const fileSize = req.file.size;
 
-      console.log(`📤 Uploading video to Walrus: ${req.file.originalname} (${req.file.size} bytes)`);
+      console.log(`📤 Uploading video to Walrus: ${req.file.originalname} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
 
-      // Upload to Walrus
-      const walrusResult = await uploadToWalrus(tempFilePath, {
-        epochs: 200, // Store for 200 epochs (~200 days)
+      // Check if file is small enough to upload as single blob (< 1MB)
+      if (fileSize < 1024 * 1024) {
+        console.log('📦 Small file, uploading as single blob');
+
+        const walrusResult = await uploadToWalrus(tempFilePath, {
+          epochs: 200,
+          deletable: true,
+        });
+
+        fs.unlinkSync(tempFilePath);
+
+        return res.json({
+          message: 'Video uploaded to Walrus successfully',
+          chunked: false,
+          blobId: walrusResult.blobId,
+          blobObjectId: walrusResult.blobObjectId,
+          streamUrl: `/api/stream/${walrusResult.blobId}`,
+          walrusUrl: walrusResult.url,
+          size: walrusResult.size,
+          endEpoch: walrusResult.endEpoch,
+          cost: walrusResult.cost,
+        });
+      }
+
+      // Large file - use Quilt chunking
+      console.log('🧩 Large file, chunking into Quilt');
+
+      // Chunk the video
+      const chunks = await chunkVideoFile(tempFilePath);
+
+      console.log(`📦 Created ${chunks.length} chunks`);
+
+      // Prepare metadata for each chunk
+      const metadata = chunks.map((chunk) => ({
+        identifier: chunk.identifier,
+        tags: {
+          sequence: chunk.index.toString(),
+          size: chunk.size.toString(),
+        },
+      }));
+
+      // Upload as Quilt
+      const quiltResult = await uploadQuiltToWalrus(chunks, {
+        epochs: 200,
         deletable: true,
+        metadata,
       });
 
       // Delete temporary file
       fs.unlinkSync(tempFilePath);
 
       res.json({
-        message: 'Video uploaded to Walrus successfully',
-        blobId: walrusResult.blobId,
-        blobObjectId: walrusResult.blobObjectId,
-        streamUrl: `/api/stream/${walrusResult.blobId}`,
-        walrusUrl: walrusResult.url,
-        size: walrusResult.size,
-        endEpoch: walrusResult.endEpoch,
-        cost: walrusResult.cost,
+        message: 'Video uploaded to Walrus as Quilt successfully',
+        chunked: true,
+        quiltId: quiltResult.quiltId,
+        quiltObjectId: quiltResult.quiltObjectId,
+        numChunks: chunks.length,
+        patches: quiltResult.patches,
+        streamUrl: `/api/stream/quilt/${quiltResult.quiltId}`,
+        walrusUrl: quiltResult.url,
+        endEpoch: quiltResult.endEpoch,
+        cost: quiltResult.cost,
       });
     } catch (error) {
       // Clean up temp file on error
