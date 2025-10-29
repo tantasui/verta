@@ -176,29 +176,46 @@ router.post('/', authenticate, async (req, res, next) => {
       category,
       tags,
       emotionalTags,
+      walrusBlobId,
+      walrusBlobObjectId,
+      walrusThumbnailBlobId,
+      walrusEndEpoch,
     } = req.body;
 
-    if (!title || !videoUrl || !duration) {
-      throw new AppError('Title, video URL, and duration are required', 400);
+    // Support both traditional URLs and Walrus blob IDs
+    if (!title || (!videoUrl && !walrusBlobId) || !duration) {
+      throw new AppError('Title, video (URL or Walrus blob ID), and duration are required', 400);
     }
+
+    // If Walrus blob ID provided, construct stream URL
+    const finalVideoUrl = walrusBlobId ? `/api/stream/${walrusBlobId}` : videoUrl;
+    const finalThumbnailUrl = walrusThumbnailBlobId
+      ? `/api/stream/${walrusThumbnailBlobId}`
+      : thumbnailUrl;
 
     const result = await pool.query(
       `INSERT INTO dramas (
         user_id, title, description, video_url, thumbnail_url,
-        duration, category, tags, emotional_tags
+        duration, category, tags, emotional_tags,
+        walrus_blob_id, walrus_blob_object_id,
+        walrus_thumbnail_blob_id, walrus_end_epoch
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *`,
       [
         req.user.id,
         title,
         description,
-        videoUrl,
-        thumbnailUrl,
+        finalVideoUrl,
+        finalThumbnailUrl,
         duration,
         category,
         tags || [],
         emotionalTags || [],
+        walrusBlobId || null,
+        walrusBlobObjectId || null,
+        walrusThumbnailBlobId || null,
+        walrusEndEpoch || null,
       ]
     );
 

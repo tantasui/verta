@@ -9,6 +9,10 @@ uploads/thumbnails/*
 !uploads/videos/.gitkeep
 !uploads/thumbnails/.gitkeep
 
+# Walrus cache (downloaded blobs should not be committed)
+cache/videos/*
+!cache/videos/.gitkeep
+
 # Logs
 logs
 *.log

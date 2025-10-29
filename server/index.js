@@ -15,6 +15,7 @@ import commentRoutes from './routes/comments.js';
 import reactionRoutes from './routes/reactions.js';
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
+import streamRoutes from './routes/stream.js';
 
 // Import config
 import pool from './config/database.js';
@@ -82,6 +83,7 @@ app.use('/api/playlists', playlistRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/reactions', reactionRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/stream', streamRoutes);
 
 // 404 handler
 app.use((req, res) => {
