@@ -1,27 +1,93 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
-import { Play, Pause, Volume2, VolumeX, SkipForward, Heart, MessageCircle } from "lucide-react"
+import { Play, Pause, Volume2, VolumeX, SkipForward, Heart, MessageCircle, Loader2 } from "lucide-react"
+import Hls from "hls.js"
 import { Button } from "../ui/button"
 import { Slider } from "../ui/slider"
 import { cn } from "../../lib/utils"
 import type { Drama, EmotionalMarker } from "../../lib/types"
 
 interface VideoPlayerProps {
-  drama: Drama
+  videoId: string
+  drama?: Drama
   onEnded?: () => void
   emotionalMarkers?: EmotionalMarker[]
   className?: string
+  autoplay?: boolean
 }
 
-export function VideoPlayer({ drama, onEnded, emotionalMarkers = [], className }: VideoPlayerProps) {
+export function VideoPlayer({ videoId, drama, onEnded, emotionalMarkers = [], className, autoplay = false }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const hlsRef = useRef<Hls | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [showControls, setShowControls] = useState(true)
+  const [isBuffering, setIsBuffering] = useState(true)
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    const aggregatorUrl = import.meta.env.VITE_AGGREGATOR_URL || 'http://localhost:3001'
+    const manifestUrl = `${aggregatorUrl}/v1/videos/${videoId}/manifest.m3u8`
+
+    // Initialize HLS.js
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90
+      })
+
+      hlsRef.current = hls
+
+      hls.loadSource(manifestUrl)
+      hls.attachMedia(video)
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('HLS manifest parsed')
+        setIsBuffering(false)
+        if (autoplay) {
+          video.play().catch(err => console.error('Autoplay failed:', err))
+          setIsPlaying(true)
+        }
+      })
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('HLS error:', data)
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.error('Fatal network error, trying to recover...')
+              hls.startLoad()
+              break
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.error('Fatal media error, trying to recover...')
+              hls.recoverMediaError()
+              break
+            default:
+              console.error('Fatal error, cannot recover')
+              hls.destroy()
+              break
+          }
+        }
+      })
+
+      return () => {
+        hls.destroy()
+      }
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari)
+      video.src = manifestUrl
+      setIsBuffering(false)
+    } else {
+      console.error('HLS is not supported')
+    }
+  }, [videoId, autoplay])
 
   useEffect(() => {
     const video = videoRef.current
@@ -31,19 +97,30 @@ export function VideoPlayer({ drama, onEnded, emotionalMarkers = [], className }
     const updateDuration = () => setDuration(video.duration)
     const handleEnded = () => {
       setIsPlaying(false)
+      video.currentTime = 0
+      if (autoplay) {
+        video.play()
+        setIsPlaying(true)
+      }
       onEnded?.()
     }
+    const handleWaiting = () => setIsBuffering(true)
+    const handleCanPlay = () => setIsBuffering(false)
 
     video.addEventListener("timeupdate", updateTime)
     video.addEventListener("loadedmetadata", updateDuration)
     video.addEventListener("ended", handleEnded)
+    video.addEventListener("waiting", handleWaiting)
+    video.addEventListener("canplay", handleCanPlay)
 
     return () => {
       video.removeEventListener("timeupdate", updateTime)
       video.removeEventListener("loadedmetadata", updateDuration)
       video.removeEventListener("ended", handleEnded)
+      video.removeEventListener("waiting", handleWaiting)
+      video.removeEventListener("canplay", handleCanPlay)
     }
-  }, [onEnded])
+  }, [onEnded, autoplay])
 
   const togglePlay = () => {
     const video = videoRef.current
@@ -103,10 +180,20 @@ export function VideoPlayer({ drama, onEnded, emotionalMarkers = [], className }
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => setShowControls(false)}
     >
-      <video ref={videoRef} className="w-full h-full object-cover" poster={drama.thumbnail} onClick={togglePlay}>
-        <source src={drama.videoUrl} type="video/mp4" />
-        Your browser does not support the video tag.
-      </video>
+      <video
+        ref={videoRef}
+        className="w-full h-full object-cover"
+        poster={drama?.thumbnail}
+        onClick={togglePlay}
+        playsInline
+      />
+
+      {/* Buffering Indicator */}
+      {isBuffering && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+          <Loader2 className="w-12 h-12 text-white animate-spin" />
+        </div>
+      )}
 
       {/* Emotional Markers */}
       {emotionalMarkers.map((marker, index) => (

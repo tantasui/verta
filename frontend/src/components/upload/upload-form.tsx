@@ -32,7 +32,7 @@ const emotionalTags = [
   "Emotional",
 ]
 
-export function UploadForm({ onSubmit, isUploading = false, uploadProgress = 0, className }: UploadFormProps) {
+export function UploadForm({ className }: UploadFormProps) {
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -41,10 +41,11 @@ export function UploadForm({ onSubmit, isUploading = false, uploadProgress = 0, 
     genre: "",
   })
   const [videoFile, setVideoFile] = useState<File | null>(null)
-  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null)
   const [videoPreview, setVideoPreview] = useState<string | null>(null)
-  const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<string>("")
+  const [uploadResult, setUploadResult] = useState<any>(null)
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
@@ -65,13 +66,6 @@ export function UploadForm({ onSubmit, isUploading = false, uploadProgress = 0, 
     }
   }, [])
 
-  const handleThumbnailUpload = useCallback((file: File) => {
-    if (file.type.startsWith("image/")) {
-      setThumbnailFile(file)
-      const url = URL.createObjectURL(file)
-      setThumbnailPreview(url)
-    }
-  }, [])
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -91,31 +85,66 @@ export function UploadForm({ onSubmit, isUploading = false, uploadProgress = 0, 
 
       const files = Array.from(e.dataTransfer.files)
       const videoFile = files.find((f) => f.type.startsWith("video/"))
-      const imageFile = files.find((f) => f.type.startsWith("image/"))
 
       if (videoFile) handleVideoUpload(videoFile)
-      if (imageFile) handleThumbnailUpload(imageFile)
     },
-    [handleVideoUpload, handleThumbnailUpload],
+    [handleVideoUpload],
   )
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!videoFile) return
+    if (!videoFile || !formData.title || !formData.description) return
+
+    setIsUploading(true)
+    setUploadStatus("Preparing video upload...")
+    setUploadResult(null)
+
+    const processorUrl = import.meta.env.VITE_PROCESSOR_URL || 'http://localhost:3002'
 
     const data = new FormData()
     data.append("video", videoFile)
-    if (thumbnailFile) data.append("thumbnail", thumbnailFile)
     data.append("title", formData.title)
     data.append("description", formData.description)
-    data.append("tags", JSON.stringify(formData.tags))
-    data.append("duration", formData.duration)
-    data.append("genre", formData.genre)
 
-    onSubmit?.(data)
+    try {
+      setUploadStatus("Uploading and processing video...")
+
+      const response = await fetch(`${processorUrl}/api/upload`, {
+        method: 'POST',
+        body: data
+      })
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+
+      setUploadStatus("Upload successful!")
+      setUploadResult(result)
+
+      // Reset form
+      setTimeout(() => {
+        setVideoFile(null)
+        setVideoPreview(null)
+        setFormData({
+          title: "",
+          description: "",
+          tags: [],
+          duration: "",
+          genre: "",
+        })
+      }, 3000)
+
+    } catch (error) {
+      console.error('Upload error:', error)
+      setUploadStatus(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setIsUploading(false)
+    }
   }
 
-  const isFormValid = formData.title && formData.description && videoFile && formData.tags.length > 0
+  const isFormValid = formData.title && formData.description && videoFile
 
   return (
     <form onSubmit={handleSubmit} className={cn("space-y-6", className)}>
@@ -185,66 +214,7 @@ export function UploadForm({ onSubmit, isUploading = false, uploadProgress = 0, 
         </CardContent>
       </Card>
 
-      {/* Thumbnail Upload */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <ImageIcon className="w-5 h-5" />
-            <span>Thumbnail</span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div
-              className={cn(
-                "border-2 border-dashed rounded-lg p-4 text-center transition-colors",
-                thumbnailFile ? "border-green-500 bg-green-50 dark:bg-green-950/20" : "border-muted-foreground/25",
-              )}
-            >
-              {thumbnailPreview ? (
-                <div className="space-y-2">
-                  <img
-                    src={thumbnailPreview || "/placeholder.svg"}
-                    alt="Thumbnail preview"
-                    className="w-full aspect-video object-cover rounded"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setThumbnailFile(null)
-                      setThumbnailPreview(null)
-                    }}
-                  >
-                    <X className="w-4 h-4 mr-1" />
-                    Remove
-                  </Button>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <ImageIcon className="w-8 h-8 mx-auto text-muted-foreground" />
-                  <Input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) handleThumbnailUpload(file)
-                    }}
-                    className="hidden"
-                    id="thumbnail-upload"
-                  />
-                  <Label htmlFor="thumbnail-upload">
-                    <Button type="button" variant="outline" size="sm" asChild>
-                      <span>Upload Thumbnail</span>
-                    </Button>
-                  </Label>
-                </div>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Thumbnail will be auto-generated */}
 
       {/* Video Details */}
       <Card>
@@ -324,12 +294,23 @@ export function UploadForm({ onSubmit, isUploading = false, uploadProgress = 0, 
         </CardContent>
       </Card>
 
-      {/* Upload Progress */}
-      {isUploading && (
+      {/* Upload Status */}
+      {(isUploading || uploadStatus) && (
         <Card>
           <CardContent className="pt-6">
-            <ProgressBar progress={uploadProgress} />
-            <p className="text-sm text-center text-muted-foreground mt-2">Uploading your video... {uploadProgress}%</p>
+            {isUploading && <ProgressBar progress={50} />}
+            <p className="text-sm text-center text-muted-foreground mt-2">{uploadStatus}</p>
+            {uploadResult && (
+              <div className="mt-4 p-4 bg-green-50 dark:bg-green-950/20 rounded-lg">
+                <p className="text-sm font-medium text-green-900 dark:text-green-100">Video uploaded successfully!</p>
+                <div className="mt-2 text-xs text-green-800 dark:text-green-200 space-y-1">
+                  <p>Video ID: {uploadResult.videoId}</p>
+                  <p>Chunks: {uploadResult.chunkCount}</p>
+                  <p>Duration: {Math.round(uploadResult.duration)}s</p>
+                  <p className="font-mono text-xs truncate">Tx: {uploadResult.txDigest}</p>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
